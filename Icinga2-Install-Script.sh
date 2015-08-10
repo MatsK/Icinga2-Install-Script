@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # Icinga2 Install Script for Ubuntu 14.04 LTS
-# Version 08-07-2015
+# Version 08-10-2015
 # Written by Malariuz <malariuz@gmx.de>
 #
 
@@ -20,9 +20,12 @@ OUTPUT="/tmp/output.tmp"
 SQLPW="/tmp/mysql.tmp"
 IDOPW="/tmp/ido.tmp"
 CUIPW="/tmp/cui.tmp"
-#trap "rm $OUTPUT; rm $INPUT; rm $SQLPW; rm $IDOPW; rm $CUIPW; exit" 0 1 2 5 15
+IWPW="/tmp/iwpw.tmp"
+IWDBPW="/tmp/iwdbpw.tmp"
+#trap "rm $OUTPUT; rm $INPUT; rm $SQLPW; rm $IDOPW; rm $CUIPW; rm $IWPW; rm $IWDBPW; exit" 0 1 2 5 15
 
 BT="Icinga2 Install Script"
+IP=$(ip addr | grep 'state UP' -A2 | tail -n1 | awk '{print $2}' | cut -f1  -d'/')
 
 ### Dialog functions
 function password(){
@@ -47,7 +50,7 @@ function progress(){
 ### Nagios Plugin install helper
 function nagios_plugins() {
 	dialog --title "Nagios Plugins" \
-		--yesno "\nInstall Nagios plugins?\n\n-Provides several check commands" 10 40
+		--yesno "\nInstall Nagios plugins?\n\n-Provides several check commands\n for Icinga2 Core" 10 40
 	ret=${?}
 	if [ "$ret" -eq "255" ]
 		then
@@ -84,60 +87,62 @@ function icinga2_classicui() {
 
 ### Icinga Web
 function icinga_web() {
-	apt-get -y install icinga-web icinga-web-config-icinga2-ido-mysql
-	echo "Icinga Web wird installiert."
-	/usr/lib/icinga-web/bin/clearcache.sh
-	service mysql restart 
-	service icinga2 restart 
-	service apache2 restart
+	password "IcingaWeb Database Password" "\nEnter a password for IcingaWeb database user" "$IWDBPW"
+	password "IcingaWeb WebUI Password" "\nEnter a password for IcingaWeb root user" "$IWPW"
+	debconf-set-selections <<< "icinga-web icinga-web/database-type select mysql"
+	debconf-set-selections <<< "icinga-web icinga-web/dbconfig-install boolean true"
+	debconf-set-selections <<< "icinga-web icinga-web/mysql/admin-pass password $(cat $SQLPW)" ## mysql root pw
+	debconf-set-selections <<< "icinga-web icinga-web/mysql/app-pass password $(cat $IWDBPW)"
+	debconf-set-selections <<< "icinga-web icinga-web/app-password-confirm password $(cat $IWDBPW)"
+	debconf-set-selections <<< "icinga-web icinga-web/rootpassword password $(cat $IWPW)"
+	debconf-set-selections <<< "icinga-web icinga-web/rootpassword-repeat password $(cat $IWPW)"
+	apt-get -y install icinga-web | progress "Installing Icinga-Web UI"
+	apt-get -y install icinga-web-config-icinga2-ido-mysql | proress "Installing Web config for IDO MySQL"
+	/usr/lib/icinga-web/bin/clearcache.sh | progress "Clear IcingaWeb cache"
+	service mysql restart | progress "Restarting MySQL server"
+	service icinga2 restart | progress "Restarting Icinga2 service"
+	service apache2 restart | progress "Restarting Apache2 server"
 }
 
 ### Icinga2 Web2
 function icinga_web2() {
-	apt-get -y install make git zend-framework php5 libapache2-mod-php5 php5-mcrypt apache2-mpm-prefork apache2-utils php5-mysql php5-ldap php5-intl php5-imagick php5-gd
-	echo "Icingaweb2 wird installiert."
-	a2enmod cgi
-	a2enmod rewrite
-	service apache2 restart
+	apt-get -y install make git zend-framework php5 libapache2-mod-php5 php5-mcrypt apache2-mpm-prefork apache2-utils php5-mysql php5-ldap php5-intl php5-imagick php5-gd \
+		| progress "Installing required packages for IcingaWeb2"
+	a2enmod cgi | progress "Enable CGI mod for Apache2"
+	a2enmod rewrite | progress "Enable Rewrite mod for Apache2"
+	service apache2 restart | progress "Restarting Apache2 server"
 	echo "include_path = ".:/usr/share/php:/usr/share/php/libzend-framework-php/"" >> /etc/php5/cli/php.ini
 	echo "include_path = ".:/usr/share/php:/usr/share/php/libzend-framework-php/"" >> /etc/php5/apache2/php.ini
 	cd /usr/src
-	git clone http://git.icinga.org/icingaweb2.git
+	git clone http://git.icinga.org/icingaweb2.git | progress "Get latest IcingaWeb2 from Github"
 	
-	#Anlegen der IcingaWeb2 mysql Datenbank
-	echo ""
+	#Create IcingaWeb2 mysql Database
 	echo > ~/icingaweb2db.sql
 	echo "CREATE DATABASE icingaweb;" >> ~/icingaweb2db.sql
 	echo "CREATE USER icingaweb@localhost IDENTIFIED BY 'icingaweb';" >> ~/icingaweb2db.sql
 	echo "GRANT ALL PRIVILEGES ON icingaweb.* TO icingaweb@localhost;" >> ~/icingaweb2db.sql
 	echo "FLUSH PRIVILEGES;" >> ~/icingaweb2db.sql
-	echo
-	echo "Kennwort für mysql-Nutzer root eingeben:"
-	echo
-	mysql -u root -p < ~/icingaweb2db.sql
+	mysql -u root -p"$(cat $SQLPW)" < ~/icingaweb2db.sql
 	
 	#Schema import
-	clear
-	echo ""
 	echo "Schema Import /icingaweb2/etc/schema/mysql.schema.sql"
 	echo "Kennwort für mysql-Nutzer root eingeben:"
-	echo
-	mysql -u root -p icingaweb < /usr/src/icingaweb2/etc/schema/mysql.schema.sql
+	mysql -u root -p"$(cat $SQLPW)" icingaweb < /usr/src/icingaweb2/etc/schema/mysql.schema.sql
 
 	cd /usr/src/
 	mv icingaweb2 /usr/share/icingaweb2
-	/usr/share/icingaweb2/bin/icingacli setup config webserver apache --document-root /usr/share/icingaweb2/public > /etc/apache2/conf-available/icingaweb2.conf
-
+	/usr/share/icingaweb2/bin/icingacli setup config webserver apache --document-root /usr/share/icingaweb2/public > /etc/apache2/conf-available/icingaweb2.conf \
+		| progress "Configure Apache2 directory for IcingaWeb2"
 	addgroup --system icingaweb2
 	usermod -a -G icingaweb2 www-data
-
-	a2enconf icingaweb2.conf
-	service apache2 reload
-
-	/usr/share/icingaweb2/bin/icingacli setup config directory
-	
+	a2enconf icingaweb2.conf | progress "Enable IcingaWeb2 Apache2 config"
+	/usr/share/icingaweb2/bin/icingacli setup config directory | progress "Configure IcingaWeb2"
+	/usr/share/icingaweb2/bin/icingacli setup token create | progress "Configure Setup token"
 	echo "date.timezone =Europe/Berlin" >> /etc/php5/apache2/php.ini
-	service apache2 restart
+	service apache2 reload | progress "Restarting Apache2 server"
+	### Installation summary
+	echo "-- IcingaWeb2 installation done --\n\nIcingaWeb2 setup - open a browser:\n- http://$IP/icingaweb2/setup\n- Setup token: $(cat /etc/icingaweb2/setup.token)" >$OUTPUT
+	display 12 60 "Installation summary"
 }
 
 function basic_inst(){
@@ -181,31 +186,31 @@ function webui_inst(){
 		"01 02") echo "Classic UI & IcingaWeb"
 				icinga2_classicui
 				ido_mysql
-				#icinga_web
+				icinga_web
 			;;
 		"01 02 03") echo "Alle UIs"
 				icinga2_classicui
 				ido_mysql
-				#icinga_web
-				#icinga_web2
+				icinga_web
+				icinga_web2
 			;;
 		"02") echo "IcingaWeb"
 				ido_mysql
-				#icinga_web
+				icinga_web
 			;;
 		"02 03") echo "IcingaWeb & Web2"
 				ido_mysql
-				#icinga_web
+				icinga_web
 				icinga_web2
 			;;
 		"01 03") echo "Classic UI & Web2"
 				icinga2_classicui
 				ido_mysql
-				#icinga_web2
+				icinga_web2
 			;;
 		"03") echo "Web2"
 				ido_mysql
-				#icinga_web2
+				icinga_web2
 			;;
 			*) echo "No UI"
 			;;
@@ -213,6 +218,7 @@ function webui_inst(){
 }
 
 function graph_inst(){
+	echo
 }
 
 while true
@@ -229,7 +235,6 @@ Basic "Install Basic System" \
 Icinga2 "Install Icinga2" \
 WebUI "Install WebUIs" \
 Graph "Install Graph Tools" \
-IdoTest "Test--IDO" \
 Exit "Exit to the shell" 2>"${INPUT}"
 
 menuitem=$(<"${INPUT}")
@@ -239,7 +244,6 @@ case $menuitem in
 	Icinga2) icinga2_inst;;
 	WebUI) webui_inst;;
 	Graph) graph_inst;;
-	IdoTest) ido_mysql;;
 	Exit) clear; echo "Bye"; break;;
 esac
 
