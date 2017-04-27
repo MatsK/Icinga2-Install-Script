@@ -1,9 +1,19 @@
 #!/bin/bash
 #
 # Icinga2 Install Script for Ubuntu 14.04 LTS
-# Version 08-10-2015
 # Written by Malariuz <malariuz@gmx.de>
-#
+# Version 2017-04-27 Changed by Mats Karlsson
+# 
+
+DEBUG=0
+HEIGHT=20
+WIDTH=70
+
+# Check if script is executed as root
+if [ "$EUID" -ne 0 ]
+  then echo "Please run as root (sudo)!"
+  exit
+fi
 
 ### Check for dialog, install if not found
 export DEBIAN_FRONTEND=noninteractive
@@ -12,7 +22,7 @@ then
 	echo "Installing Dialog..."
 	apt-get -qq install dialog -y > /dev/null 2>&1
 fi
-##TODO Check for debconf-set-selections
+## TODO Check for debconf-set-selections
 
 ### Temp files
 INPUT="/tmp/input.tmp"
@@ -35,6 +45,7 @@ function password(){
 	dialog --backtitle "${BT}" --title "${t}" --clear --insecure --passwordbox "${tt}" 10 30 2> "${pw}"
 }
 
+
 function display(){
 	local h=${1-10}
 	local w=${2-41}
@@ -42,10 +53,12 @@ function display(){
 	dialog --backtitle "${BT}" --title "${t}" --clear --msgbox "$(<$OUTPUT)" ${h} ${w}
 }
 
+
 function progress(){
 	local t=${1}
 	dialog --backtitle "${BT}" --title "${t}" --progressbox 16 80; sleep 1;
 }
+
 
 ### Nagios Plugin install helper
 function nagios_plugins() {
@@ -63,27 +76,30 @@ function nagios_plugins() {
 	fi
 }
 
+
 ### Icinga2 IDO-MySQL
 function ido_mysql() {
-	#TODO: password box for SQL root pw, when script was interupted
+	# TODO: password box for SQL root pw, when script was interupted
 	password "IDO-MySQL Password" "\nEnter a password for icinga2-ido-mysq user" "$IDOPW"
 	debconf-set-selections <<< "icinga2-ido-mysql icinga2-ido-mysql/dbconfig-install boolean true"
-	debconf-set-selections <<< "icinga2-ido-mysql icinga2-ido-mysql/enable boolean true" ##IDO Icinga feature enable
+	debconf-set-selections <<< "icinga2-ido-mysql icinga2-ido-mysql/enable boolean true"                         ## IDO Icinga feature enable
 	debconf-set-selections <<< "icinga2-ido-mysql icinga2-ido-mysql/mysql/admin-pass password $(cat $SQLPW)"
 	debconf-set-selections <<< "icinga2-ido-mysql icinga2-ido-mysql/mysql/app-pass password $(cat $IDOPW)"
-	debconf-set-selections <<< "icinga2-ido-mysql icinga2-ido-mysql/app-password-confirm password $(cat $IDOPW)" ##IDO DB PW confirm
+	debconf-set-selections <<< "icinga2-ido-mysql icinga2-ido-mysql/app-password-confirm password $(cat $IDOPW)" ## IDO DB PW confirm
 	apt-get -qq -y install icinga2-ido-mysql 2>&1 | progress "Install Icinga2-IDO-MySQL"
 	icinga2 feature enable ido-mysql 2>&1 | progress "Enable Icinga2 ido-mysql feature"
 	service icinga2 restart 2>&1 | progress "Restarting Icinga2 service"
 }
+
 
 ### Icinga2 Classic UI
 function icinga2_classicui() {
 	password "ClassicUI Password" "\nEnter a password for icingaadmin user" "$CUIPW"
 	debconf-set-selections <<< "icinga2-classicui icinga2-classicui/adminpassword password $(cat $CUIPW)"
 	debconf-set-selections <<< "icinga2-classicui icinga2-classicui/adminpassword-repeat password $(cat $CUIPW)"
-	apt-get -y install icinga2-classicui 2>&1 | progress #TODO annoying messages to be destoryed
+	apt-get -y install icinga2-classicui 2>&1 | progress                                                         ## TODO annoying messages to be destoryed
 }
+
 
 ### Icinga Web
 function icinga_web() {
@@ -91,7 +107,7 @@ function icinga_web() {
 	password "IcingaWeb WebUI Password" "\nEnter a password for IcingaWeb root user" "$IWPW"
 	debconf-set-selections <<< "icinga-web icinga-web/database-type select mysql"
 	debconf-set-selections <<< "icinga-web icinga-web/dbconfig-install boolean true"
-	debconf-set-selections <<< "icinga-web icinga-web/mysql/admin-pass password $(cat $SQLPW)" ## mysql root pw
+	debconf-set-selections <<< "icinga-web icinga-web/mysql/admin-pass password $(cat $SQLPW)"                   ## mysql root pw
 	debconf-set-selections <<< "icinga-web icinga-web/mysql/app-pass password $(cat $IWDBPW)"
 	debconf-set-selections <<< "icinga-web icinga-web/app-password-confirm password $(cat $IWDBPW)"
 	debconf-set-selections <<< "icinga-web icinga-web/rootpassword password $(cat $IWPW)"
@@ -116,16 +132,16 @@ function icinga_web2() {
 	cd /usr/src
 	git clone http://git.icinga.org/icingaweb2.git 2>&1 | progress "Get latest IcingaWeb2 from Github"
 	
-	#Create IcingaWeb2 mysql Database
+	# Create IcingaWeb2 mysql Database
 	### TODO: Password for icingaweb_db (group and member for icingaweb2)
 	echo > ~/icingaweb2db.sql
 	echo "CREATE DATABASE icingaweb_db;" >> ~/icingaweb2db.sql
-	echo "CREATE USER icingaweb_db@localhost IDENTIFIED BY 'icingaweb_db';" >> ~/icingaweb2db.sql ## PW "IDENTIFIED BY ???"
+	echo "CREATE USER icingaweb_db@localhost IDENTIFIED BY 'icingaweb_db';" >> ~/icingaweb2db.sql                ## PW "IDENTIFIED BY ???"
 	echo "GRANT ALL PRIVILEGES ON icingaweb_db.* TO icingaweb_db@localhost;" >> ~/icingaweb2db.sql
 	echo "FLUSH PRIVILEGES;" >> ~/icingaweb2db.sql
 	mysql -u root -p"$(cat $SQLPW)" < ~/icingaweb2db.sql
 	
-	#Schema import
+	# Schema import
 	echo "Schema Import /icingaweb2/etc/schema/mysql.schema.sql"
 	mysql -u root -p"$(cat $SQLPW)" icingaweb_db < /usr/src/icingaweb2/etc/schema/mysql.schema.sql
 
@@ -145,6 +161,7 @@ function icinga_web2() {
 	display 12 60 "Installation summary"
 }
 
+
 function basic_inst(){
 	echo "-- Installing Basic System --\n\n-Add Icinga2 repository\n-Update and upgrade packages\n-Install Apache2 & MySQL Server\n\nPress Enter to begin" >$OUTPUT
 	display 12 60 "Install Basic System"
@@ -161,6 +178,7 @@ function basic_inst(){
 	apt-get -y install mysql-server-5.5 2>&1 | progress "Install MySQL server"
 }
 
+
 function icinga2_inst(){
 	echo "-- Installing Icinga2 --\n\n-Install Icinga2 Core\n-Add user www-data to nagios group\n\nPress Enter to begin" >$OUTPUT
 	display 12 60 "Install Icinga2 Core"
@@ -171,6 +189,7 @@ function icinga2_inst(){
 	service icinga2 restart 2>&1 | progress "Restart Icinga2 Core"
 	nagios_plugins
 }
+
 
 function webui_inst(){
 	dialog --backtitle "${BT}" \
@@ -217,12 +236,14 @@ function webui_inst(){
 	esac
 }
 
+
 function graph_inst(){
 	echo
 }
 
 while true
 do
+
 
 ### Main Menu
 dialog --clear --help-button --backtitle "Icinga2 Install Script" \
